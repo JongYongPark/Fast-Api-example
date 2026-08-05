@@ -55,7 +55,13 @@ jobs:
           if (-not $covBin) { Write-Error "coverity.exe not found"; exit 1 }
           Write-Host "Using: $($covBin.FullName)"
           $env:PATH = "$($covBin.DirectoryName);$env:PATH"
-          coverity capture --debug --project-dir . --dir idir --language python
+
+          Write-Host "=== coverity capture --help ==="
+          coverity capture --help 2>&1 || true
+
+          Write-Host "=== Running capture ==="
+          coverity capture --dir idir --language python 2>&1
+          Write-Host "Exit: $LASTEXITCODE"
 
       - name: Check emit results
         if: always()
