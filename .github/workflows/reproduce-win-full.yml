@@ -25,12 +25,25 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: System Info
+      - name: Set Korean locale (CP949) - registry + reboot workaround
+        run: |
+          # 고객 환경: Windows 11 한국어, CP949
+          # 방법: 레지스트리 수정 후 explorer 재시작 없이 새 프로세스에 적용되도록 설정
+          # ACP/OEMCP 레지스트리 변경 (재부팅 없이 신규 프로세스에 적용 시도)
+          $nlsKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage"
+          Set-ItemProperty -Path $nlsKey -Name "ACP"   -Value "949" -Type String
+          Set-ItemProperty -Path $nlsKey -Name "OEMCP"  -Value "949" -Type String
+          Set-WinSystemLocale ko-KR
+          Write-Host "Registry ACP set to 949"
+          Get-ItemProperty $nlsKey | Select-Object ACP, OEMCP
+
+      - name: System Info (verify locale)
         run: |
           python --version
-          chcp
-          [System.Globalization.CultureInfo]::CurrentCulture
-          [System.Globalization.CultureInfo]::CurrentUICulture
+          Write-Host "Console code page: $(chcp)"
+          Write-Host "System locale: $((Get-WinSystemLocale).Name)"
+          Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage" | Select-Object ACP, OEMCP
+          [System.Globalization.CultureInfo]::CurrentCulture.DisplayName
 
       - name: Cache Coverity Full Analysis
         id: cache-coverity
@@ -64,21 +77,34 @@ jobs:
           Write-Host "coverity.exe: $($coverityExe.FullName)"
           & $coverityExe.FullName --version
 
-      - name: Run coverity capture (customer command)
+      - name: Run coverity capture (Korean CP949 locale)
+        env:
+          # CP949 환경 강제: cov-internal-capture-files가 @utf8@ prefix를 쓰지만
+          # cov-translate가 ACP(949)로 읽으면 UnicodeDecodeError 발생
+          # → 고객과 동일한 환경 재현
+          PYTHONLEGACY: "1"
         run: |
           $coverityExe = Get-ChildItem -Path "${{ runner.temp }}\coverity" -Recurse -Filter "coverity.exe" |
             Select-Object -First 1
           $covBin = $coverityExe.DirectoryName
           $env:PATH = "$covBin;$env:PATH"
 
+          Write-Host "=== Current code page & ACP ==="
+          chcp
+          Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage" | Select-Object ACP, OEMCP
+
+          Write-Host ""
           Write-Host "=== .py files in project ==="
           Get-ChildItem -Recurse -Filter "*.py" . | Select-Object -ExpandProperty FullName
 
           Write-Host ""
-          Write-Host "=== coverity capture --language python ==="
+          Write-Host "=== coverity capture --language python (Korean locale) ==="
           Remove-Item -Recurse -Force -ErrorAction SilentlyContinue idir
-          coverity capture --project-dir . --dir idir --language python 2>&1
-          Write-Host "coverity capture exit: $LASTEXITCODE"
+          # chcp 949: 이 프로세스의 콘솔 코드 페이지를 CP949로 설정
+          # coverity가 subprocess를 spawn할 때 이 코드 페이지를 상속받음
+          cmd /c "chcp 949 > nul && coverity capture --project-dir . --dir idir --language python"
+          $captureExit = $LASTEXITCODE
+          Write-Host "coverity capture exit: $captureExit"
 
           Write-Host ""
           Write-Host "=== cov-manage-emit list ==="
@@ -92,18 +118,26 @@ jobs:
           Write-Host "=== build-log.txt (encoding/failure lines) ==="
           if (Test-Path idir\build-log.txt) {
             Select-String -Path idir\build-log.txt `
-              -Pattern "encoding|ISO|UTF|failure|error|warning" `
+              -Pattern "encoding|ISO|UTF|cp949|unicode|failure|error|warning" `
               -CaseSensitive:$false |
-              Select-Object -First 60 | ForEach-Object { $_.Line }
+              Select-Object -First 80 | ForEach-Object { $_.Line }
           } else {
             Get-ChildItem -Recurse idir\ -Filter "*.log" -ErrorAction SilentlyContinue |
               ForEach-Object {
                 Write-Host "--- $($_.FullName) ---"
                 Select-String -Path $_.FullName `
-                  -Pattern "encoding|ISO|UTF|failure|error" `
+                  -Pattern "encoding|ISO|UTF|cp949|unicode|failure|error" `
                   -CaseSensitive:$false |
-                  Select-Object -First 20 | ForEach-Object { $_.Line }
+                  Select-Object -First 30 | ForEach-Object { $_.Line }
               }
+          }
+
+          # 실패 재현 여부 판정
+          Write-Host ""
+          if ($captureExit -ne 0) {
+            Write-Host "REPRODUCED: coverity capture failed (exit $captureExit) — encoding bug triggered"
+          } else {
+            Write-Host "NOT REPRODUCED: coverity capture succeeded — check cov-manage-emit list for (failure) entries"
           }
 
       - name: Save cache (always, even on failure)
