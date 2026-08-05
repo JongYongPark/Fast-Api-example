@@ -14,7 +14,6 @@ jobs:
 
     env:
       COV_VERSION: ${{ inputs.version || '2026.6.0' }}
-      # repo.blackduck.com credentials (Settings → Secrets → ARTIFACTORY_USER / ARTIFACTORY_TOKEN)
       ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
       ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
 
@@ -34,51 +33,76 @@ jobs:
           [System.Globalization.CultureInfo]::CurrentCulture
           [System.Globalization.CultureInfo]::CurrentUICulture
 
+      - name: Cache Coverity Thin Client
+        id: cache-coverity
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\coverity
+          key: coverity-thin-client-win64-${{ env.COV_VERSION }}
+
       - name: Download Coverity Thin Client (repo.blackduck.com)
+        if: steps.cache-coverity.outputs.cache-hit != 'true'
         run: |
           $filename = "cov-thin-client-win64-${env:COV_VERSION}.tar.gz"
           $url = "https://repo.blackduck.com/artifactory/coverity-releases/${env:COV_VERSION}/${filename}"
+          $dest = "${{ runner.temp }}\${filename}"
+          $extractTo = "${{ runner.temp }}\coverity"
           Write-Host "Downloading: $url"
           curl -fLsS `
             -u "${env:ARTIFACTORY_USER}:${env:ARTIFACTORY_TOKEN}" `
-            -o "${{ runner.temp }}\${filename}" `
+            -o "$dest" `
             "$url"
-          New-Item -ItemType Directory -Force -Path "${{ runner.temp }}\coverity" | Out-Null
-          tar -xzf "${{ runner.temp }}\${filename}" -C "${{ runner.temp }}\coverity"
-          Write-Host "Extracted:"
-          Get-ChildItem "${{ runner.temp }}\coverity" -Depth 2 | Select-Object FullName
+          Write-Host "Download complete. Extracting..."
+          New-Item -ItemType Directory -Force -Path "$extractTo" | Out-Null
+          tar -xzf "$dest" -C "$extractTo"
 
-      - name: Run Capture (debug)
+      - name: Show thin client contents
         run: |
-          $covBin = Get-ChildItem -Path "${{ runner.temp }}\coverity" -Recurse -Filter "cov-build.exe" |
-            Select-Object -First 1
-          if (-not $covBin) { Write-Error "cov-build.exe not found"; exit 1 }
-          $covDir = $covBin.DirectoryName
-          $env:PATH = "$covDir;$env:PATH"
-          $configXml = "${{ runner.temp }}\coverity\config\coverity_config.xml"
-          Write-Host "Using covDir: $covDir"
+          Write-Host "Thin client contents:"
+          Get-ChildItem "${{ runner.temp }}\coverity" -Depth 1 | Select-Object Name
 
-          Write-Host "=== Repo .py files ==="
+      - name: Run coverity capture (customer command)
+        run: |
+          $coverityExe = Get-ChildItem -Path "${{ runner.temp }}\coverity" -Recurse -Filter "coverity.exe" |
+            Select-Object -First 1
+          if (-not $coverityExe) { Write-Error "coverity.exe not found"; exit 1 }
+          $covBin = $coverityExe.DirectoryName
+          $env:PATH = "$covBin;$env:PATH"
+          Write-Host "coverity bin: $covBin"
+          coverity --version
+
+          Write-Host ""
+          Write-Host "=== .py files in project ==="
           Get-ChildItem -Recurse -Filter "*.py" . | Select-Object -ExpandProperty FullName
 
-          Write-Host "=== Step 1: cov-configure --config with explicit path ==="
-          cov-configure --config "$configXml" --python 2>&1
-          Write-Host "configure exit: $LASTEXITCODE"
-
-          Write-Host "=== Step 2: cov-build (with explicit --config) ==="
+          Write-Host ""
+          Write-Host "=== coverity capture (customer command) ==="
+          Write-Host "Command: coverity capture --project-dir . --dir idir --language python"
           New-Item -ItemType Directory -Force -Path idir | Out-Null
-          cov-build --config "$configXml" --dir idir --no-command --fs-capture-search . 2>&1
-          Write-Host "cov-build exit: $LASTEXITCODE"
+          coverity capture --project-dir . --dir idir --language python 2>&1
+          Write-Host "coverity capture exit: $LASTEXITCODE"
 
-          Write-Host "=== Step 3: cov-manage-emit list ==="
+          Write-Host ""
+          Write-Host "=== cov-manage-emit list ==="
           cov-manage-emit --dir idir list 2>&1
-          Write-Host "emit list exit: $LASTEXITCODE"
 
-          Write-Host "=== idir emit contents ==="
-          Get-ChildItem -Recurse idir\emit\ -ErrorAction SilentlyContinue | Select-Object FullName | head -20
+          Write-Host ""
+          Write-Host "=== capture diagnostics ==="
+          cov-manage-emit --dir idir list-capture-diagnostics 2>&1
 
-          Write-Host "=== cov-build.log ==="
-          Get-Content idir\build-log.txt -ErrorAction SilentlyContinue | tail -30
+          Write-Host ""
+          Write-Host "=== Encoding detections ==="
+          if (Test-Path idir\build-log.txt) {
+            Select-String -Path idir\build-log.txt -Pattern "encoding|ISO|UTF|failure|error|warning" -CaseSensitive:$false |
+              Select-Object -First 50 | ForEach-Object { $_.Line }
+          } else {
+            Get-ChildItem -Recurse idir\ -Filter "*.log" -ErrorAction SilentlyContinue |
+              ForEach-Object {
+                Write-Host "--- $($_.FullName) ---"
+                Select-String -Path $_.FullName -Pattern "encoding|ISO|UTF|failure|error" -CaseSensitive:$false |
+                  Select-Object -First 20 | ForEach-Object { $_.Line }
+              }
+          }
 
       - name: Upload idir artifact
         if: always()
