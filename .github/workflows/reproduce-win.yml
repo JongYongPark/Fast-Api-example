@@ -55,20 +55,30 @@ jobs:
           if (-not $covBin) { Write-Error "cov-build.exe not found"; exit 1 }
           $covDir = $covBin.DirectoryName
           $env:PATH = "$covDir;$env:PATH"
+          $configXml = "${{ runner.temp }}\coverity\config\coverity_config.xml"
           Write-Host "Using covDir: $covDir"
 
-          Write-Host "=== Step 1: cov-configure --python ==="
-          cov-configure --python 2>&1
+          Write-Host "=== Repo .py files ==="
+          Get-ChildItem -Recurse -Filter "*.py" . | Select-Object -ExpandProperty FullName
+
+          Write-Host "=== Step 1: cov-configure --config with explicit path ==="
+          cov-configure --config "$configXml" --python 2>&1
           Write-Host "configure exit: $LASTEXITCODE"
 
-          Write-Host "=== Step 2: cov-build --dir idir --no-command --fs-capture-search . ==="
+          Write-Host "=== Step 2: cov-build (with explicit --config) ==="
           New-Item -ItemType Directory -Force -Path idir | Out-Null
-          cov-build --dir idir --no-command --fs-capture-search . 2>&1
+          cov-build --config "$configXml" --dir idir --no-command --fs-capture-search . 2>&1
           Write-Host "cov-build exit: $LASTEXITCODE"
 
           Write-Host "=== Step 3: cov-manage-emit list ==="
           cov-manage-emit --dir idir list 2>&1
           Write-Host "emit list exit: $LASTEXITCODE"
+
+          Write-Host "=== idir emit contents ==="
+          Get-ChildItem -Recurse idir\emit\ -ErrorAction SilentlyContinue | Select-Object FullName | head -20
+
+          Write-Host "=== cov-build.log ==="
+          Get-Content idir\build-log.txt -ErrorAction SilentlyContinue | tail -30
 
       - name: Upload idir artifact
         if: always()
