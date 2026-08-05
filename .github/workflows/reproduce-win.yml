@@ -57,34 +57,21 @@ jobs:
           $covDir = $covBin.DirectoryName
           $env:PATH = "$covDir;$env:PATH"
 
-          Write-Host "=== coverity --help (all subcommands) ==="
-          coverity --help 2>&1 || true
+          Write-Host "=== coverity capture --project-dir . ==="
+          coverity -V capture --project-dir . 2>&1
+          Write-Host "Capture exit: $LASTEXITCODE"
 
-          Write-Host "=== List bin/ contents ==="
-          Get-ChildItem $covDir | Select-Object Name
+          Write-Host "=== coverity list (captured files) ==="
+          coverity list 2>&1
+          Write-Host "List exit: $LASTEXITCODE"
 
-          Write-Host "=== coverity capture --project-dir . (no server) ==="
-          coverity capture --project-dir . 2>&1 || true
-          Write-Host "Exit: $LASTEXITCODE"
+          Write-Host "=== .coverity dir contents ==="
+          Get-ChildItem -Recurse .coverity -ErrorAction SilentlyContinue | Select-Object FullName | head -30
 
-      - name: Check emit results
-        if: always()
-        run: |
-          $emitExe = Get-ChildItem -Path "${{ runner.temp }}\coverity" -Recurse -Filter "cov-manage-emit.exe" |
-            Select-Object -First 1
-          if ($emitExe) {
-            Write-Host "Running: $($emitExe.FullName) --dir idir list"
-            & $emitExe.FullName --dir idir list
-          } else {
-            Write-Host "cov-manage-emit not found — listing idir\emit directly"
-            Get-ChildItem -Recurse idir\emit\ -Filter "*.txt" -ErrorAction SilentlyContinue |
-              Select-Object FullName
-          }
-
-      - name: Upload idir
+      - name: Upload coverity capture output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: idir-windows-debug
-          path: idir/
+          name: coverity-capture-output
+          path: .coverity/
           if-no-files-found: warn
