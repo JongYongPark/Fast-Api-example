@@ -54,13 +54,17 @@ jobs:
             Select-Object -First 1
           if (-not $covBin) { Write-Error "coverity.exe not found"; exit 1 }
           Write-Host "Using: $($covBin.FullName)"
-          $env:PATH = "$($covBin.DirectoryName);$env:PATH"
+          $covDir = $covBin.DirectoryName
+          $env:PATH = "$covDir;$env:PATH"
 
-          Write-Host "=== coverity capture --help ==="
-          coverity capture --help 2>&1 || true
+          Write-Host "=== coverity --help (all subcommands) ==="
+          coverity --help 2>&1 || true
 
-          Write-Host "=== Running capture ==="
-          coverity capture --dir idir --language python 2>&1
+          Write-Host "=== List bin/ contents ==="
+          Get-ChildItem $covDir | Select-Object Name
+
+          Write-Host "=== coverity capture --project-dir . (no server) ==="
+          coverity capture --project-dir . 2>&1 || true
           Write-Host "Exit: $LASTEXITCODE"
 
       - name: Check emit results
