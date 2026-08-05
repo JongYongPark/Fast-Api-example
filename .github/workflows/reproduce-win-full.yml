@@ -1,0 +1,122 @@
+name: Reproduce Python Buildless Capture - Full Analysis (Windows)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Coverity Full Analysis version (e.g. 2026.6.0)'
+        required: false
+        default: '2026.6.0'
+
+jobs:
+  reproduce:
+    runs-on: windows-latest
+
+    env:
+      COV_VERSION: ${{ inputs.version || '2026.6.0' }}
+      ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
+      ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: System Info
+        run: |
+          python --version
+          chcp
+          [System.Globalization.CultureInfo]::CurrentCulture
+          [System.Globalization.CultureInfo]::CurrentUICulture
+
+      - name: Cache Coverity Full Analysis
+        id: cache-coverity
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\coverity
+          key: coverity-full-win64-${{ env.COV_VERSION }}
+
+      - name: Download & Extract Coverity Full Analysis
+        if: steps.cache-coverity.outputs.cache-hit != 'true'
+        run: |
+          $filename = "cov-analysis-win64-${env:COV_VERSION}.zip"
+          $url = "https://repo.blackduck.com/artifactory/coverity-releases/${env:COV_VERSION}/${filename}"
+          $dest = "${{ runner.temp }}\${filename}"
+          $extractTo = "${{ runner.temp }}\coverity"
+          Write-Host "Downloading: $url (~3 GB, may take a few minutes)"
+          curl -fLsS `
+            -u "${env:ARTIFACTORY_USER}:${env:ARTIFACTORY_TOKEN}" `
+            -o "$dest" `
+            "$url"
+          Write-Host "Download complete. Extracting..."
+          New-Item -ItemType Directory -Force -Path "$extractTo" | Out-Null
+          tar -xf "$dest" -C "$extractTo"
+          Write-Host "Extracted to: $extractTo"
+
+      - name: Verify installation
+        run: |
+          $coverityExe = Get-ChildItem -Path "${{ runner.temp }}\coverity" -Recurse -Filter "coverity.exe" |
+            Select-Object -First 1
+          if (-not $coverityExe) { Write-Error "coverity.exe not found"; exit 1 }
+          Write-Host "coverity.exe: $($coverityExe.FullName)"
+          & $coverityExe.FullName --version
+
+      - name: Run coverity capture (customer command)
+        run: |
+          $coverityExe = Get-ChildItem -Path "${{ runner.temp }}\coverity" -Recurse -Filter "coverity.exe" |
+            Select-Object -First 1
+          $covBin = $coverityExe.DirectoryName
+          $env:PATH = "$covBin;$env:PATH"
+
+          Write-Host "=== .py files in project ==="
+          Get-ChildItem -Recurse -Filter "*.py" . | Select-Object -ExpandProperty FullName
+
+          Write-Host ""
+          Write-Host "=== coverity capture --language python ==="
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue idir
+          coverity capture --project-dir . --dir idir --language python 2>&1
+          Write-Host "coverity capture exit: $LASTEXITCODE"
+
+          Write-Host ""
+          Write-Host "=== cov-manage-emit list ==="
+          cov-manage-emit --dir idir list 2>&1
+
+          Write-Host ""
+          Write-Host "=== capture diagnostics ==="
+          cov-manage-emit --dir idir list-capture-diagnostics 2>&1
+
+          Write-Host ""
+          Write-Host "=== build-log.txt (encoding/failure lines) ==="
+          if (Test-Path idir\build-log.txt) {
+            Select-String -Path idir\build-log.txt `
+              -Pattern "encoding|ISO|UTF|failure|error|warning" `
+              -CaseSensitive:$false |
+              Select-Object -First 60 | ForEach-Object { $_.Line }
+          } else {
+            Get-ChildItem -Recurse idir\ -Filter "*.log" -ErrorAction SilentlyContinue |
+              ForEach-Object {
+                Write-Host "--- $($_.FullName) ---"
+                Select-String -Path $_.FullName `
+                  -Pattern "encoding|ISO|UTF|failure|error" `
+                  -CaseSensitive:$false |
+                  Select-Object -First 20 | ForEach-Object { $_.Line }
+              }
+          }
+
+      - name: Save cache (always, even on failure)
+        if: steps.cache-coverity.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}\coverity
+          key: coverity-full-win64-${{ env.COV_VERSION }}
+
+      - name: Upload idir artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: idir-windows-full-debug
+          path: idir/
+          if-no-files-found: warn
