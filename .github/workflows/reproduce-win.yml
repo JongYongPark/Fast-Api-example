@@ -78,17 +78,21 @@ jobs:
           Write-Host ""
           Write-Host "=== coverity capture (customer command) ==="
           Write-Host "Command: coverity capture --project-dir . --dir idir --language python"
-          New-Item -ItemType Directory -Force -Path idir | Out-Null
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue idir
           coverity capture --project-dir . --dir idir --language python 2>&1
           Write-Host "coverity capture exit: $LASTEXITCODE"
 
           Write-Host ""
           Write-Host "=== cov-manage-emit list ==="
-          cov-manage-emit --dir idir list 2>&1
-
-          Write-Host ""
-          Write-Host "=== capture diagnostics ==="
-          cov-manage-emit --dir idir list-capture-diagnostics 2>&1
+          $covManageEmit = Get-Command cov-manage-emit -ErrorAction SilentlyContinue
+          if ($covManageEmit) {
+            cov-manage-emit --dir idir list 2>&1
+            Write-Host ""
+            Write-Host "=== capture diagnostics ==="
+            cov-manage-emit --dir idir list-capture-diagnostics 2>&1
+          } else {
+            Write-Host "cov-manage-emit not found in thin client — skipping"
+          }
 
           Write-Host ""
           Write-Host "=== Encoding detections ==="
