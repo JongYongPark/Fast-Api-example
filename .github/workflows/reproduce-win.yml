@@ -37,7 +37,7 @@ jobs:
       - name: Download Coverity Thin Client (repo.blackduck.com)
         run: |
           $filename = "cov-thin-client-win64-${env:COV_VERSION}.tar.gz"
-          $url = "https://repo.blackduck.com/coverity-releases/${filename}"
+          $url = "https://repo.blackduck.com/artifactory/coverity-releases/${env:COV_VERSION}/${filename}"
           Write-Host "Downloading: $url"
           curl -fLsS `
             -u "${env:ARTIFACTORY_USER}:${env:ARTIFACTORY_TOKEN}" `
