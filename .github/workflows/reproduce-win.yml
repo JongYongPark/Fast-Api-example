@@ -50,28 +50,30 @@ jobs:
 
       - name: Run Capture (debug)
         run: |
-          $covBin = Get-ChildItem -Path "${{ runner.temp }}\coverity" -Recurse -Filter "coverity.exe" |
+          $covBin = Get-ChildItem -Path "${{ runner.temp }}\coverity" -Recurse -Filter "cov-build.exe" |
             Select-Object -First 1
-          if (-not $covBin) { Write-Error "coverity.exe not found"; exit 1 }
-          Write-Host "Using: $($covBin.FullName)"
+          if (-not $covBin) { Write-Error "cov-build.exe not found"; exit 1 }
           $covDir = $covBin.DirectoryName
           $env:PATH = "$covDir;$env:PATH"
+          Write-Host "Using covDir: $covDir"
 
-          Write-Host "=== coverity capture --project-dir . ==="
-          coverity -V capture --project-dir . 2>&1
-          Write-Host "Capture exit: $LASTEXITCODE"
+          Write-Host "=== Step 1: cov-configure --python ==="
+          cov-configure --python 2>&1
+          Write-Host "configure exit: $LASTEXITCODE"
 
-          Write-Host "=== coverity list (captured files) ==="
-          coverity list 2>&1
-          Write-Host "List exit: $LASTEXITCODE"
+          Write-Host "=== Step 2: cov-build --dir idir --no-command --fs-capture-search . ==="
+          New-Item -ItemType Directory -Force -Path idir | Out-Null
+          cov-build --dir idir --no-command --fs-capture-search . 2>&1
+          Write-Host "cov-build exit: $LASTEXITCODE"
 
-          Write-Host "=== .coverity dir contents ==="
-          Get-ChildItem -Recurse .coverity -ErrorAction SilentlyContinue | Select-Object FullName | head -30
+          Write-Host "=== Step 3: cov-manage-emit list ==="
+          cov-manage-emit --dir idir list 2>&1
+          Write-Host "emit list exit: $LASTEXITCODE"
 
-      - name: Upload coverity capture output
+      - name: Upload idir artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverity-capture-output
-          path: .coverity/
+          name: idir-windows-debug
+          path: idir/
           if-no-files-found: warn
