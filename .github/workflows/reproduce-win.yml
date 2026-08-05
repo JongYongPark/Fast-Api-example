@@ -1,0 +1,80 @@
+name: Reproduce Python Buildless Capture (Windows)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Coverity thin client version (e.g. 2026.6.0)'
+        required: false
+        default: '2026.6.0'
+
+jobs:
+  reproduce:
+    runs-on: windows-latest
+
+    env:
+      COV_VERSION: ${{ inputs.version || '2026.6.0' }}
+      # repo.blackduck.com credentials (Settings → Secrets → ARTIFACTORY_USER / ARTIFACTORY_TOKEN)
+      ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
+      ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: System Info
+        run: |
+          python --version
+          Get-Command python | Select-Object Source
+          chcp
+          [System.Globalization.CultureInfo]::CurrentCulture
+          [System.Globalization.CultureInfo]::CurrentUICulture
+
+      - name: Download Coverity Thin Client (repo.blackduck.com)
+        run: |
+          $filename = "cov-thin-client-win64-${env:COV_VERSION}.tar.gz"
+          $url = "https://repo.blackduck.com/coverity-releases/${filename}"
+          Write-Host "Downloading: $url"
+          curl -fLsS `
+            -u "${env:ARTIFACTORY_USER}:${env:ARTIFACTORY_TOKEN}" `
+            -o "${{ runner.temp }}\${filename}" `
+            "$url"
+          New-Item -ItemType Directory -Force -Path "${{ runner.temp }}\coverity" | Out-Null
+          tar -xzf "${{ runner.temp }}\${filename}" -C "${{ runner.temp }}\coverity"
+          Write-Host "Extracted:"
+          Get-ChildItem "${{ runner.temp }}\coverity" -Depth 2 | Select-Object FullName
+
+      - name: Run Capture (debug)
+        run: |
+          $covBin = Get-ChildItem -Path "${{ runner.temp }}\coverity" -Recurse -Filter "coverity.exe" |
+            Select-Object -First 1
+          if (-not $covBin) { Write-Error "coverity.exe not found"; exit 1 }
+          Write-Host "Using: $($covBin.FullName)"
+          $env:PATH = "$($covBin.DirectoryName);$env:PATH"
+          coverity capture --debug --project-dir . --dir idir --language python
+
+      - name: Check emit results
+        if: always()
+        run: |
+          $emitExe = Get-ChildItem -Path "${{ runner.temp }}\coverity" -Recurse -Filter "cov-manage-emit.exe" |
+            Select-Object -First 1
+          if ($emitExe) {
+            Write-Host "Running: $($emitExe.FullName) --dir idir list"
+            & $emitExe.FullName --dir idir list
+          } else {
+            Write-Host "cov-manage-emit not found — listing idir\emit directly"
+            Get-ChildItem -Recurse idir\emit\ -Filter "*.txt" -ErrorAction SilentlyContinue |
+              Select-Object FullName
+          }
+
+      - name: Upload idir
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: idir-windows-debug
+          path: idir/
+          if-no-files-found: warn
